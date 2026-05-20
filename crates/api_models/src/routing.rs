@@ -628,6 +628,7 @@ pub struct ProgramThreeDsDecisionRule {
     pub metadata: std::collections::HashMap<String, serde_json::Value>,
 }
 
+
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleThreeDsDecisionRule {
