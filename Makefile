@@ -35,7 +35,7 @@ ROOT_DIR := $(realpath $(ROOT_DIR_WITH_SLASH))
 
 
 # Check a local package and all of its dependencies for errors
-# 
+#
 # Usage :
 #	make check
 check:
@@ -113,3 +113,33 @@ precommit : fmt clippy test
 
 hack:
 	cargo hack check --workspace --each-feature --all-targets --exclude-features 'v2 payment_v2'
+
+
+# = BIN Routing Commands
+#
+# Usage:
+#   make bin-test          Run BIN routing unit tests
+#   make bin-check         Verify compilation
+#   make bin-demo-rupay    Send test RuPay BIN payment (routes to phonypay)
+#   make bin-demo-visa     Send test Visa BIN payment (routes to stripe_test)
+.PHONY: bin-test bin-check bin-demo-rupay bin-demo-visa
+
+bin-test:
+	cargo test --package router --lib core::payments::routing::tests
+
+bin-check:
+	cargo check -p router
+
+bin-demo-rupay:
+	@echo "=== Sending RuPay BIN Payment (602228 -> phonypay) ==="
+	curl -s -X POST 'http://localhost:8080/payments' \
+		-H 'Content-Type: application/json' \
+		-H 'api-key: $(API_KEY)' \
+		-d '{"amount":1500,"currency":"INR","payment_method":"card","payment_method_data":{"card":{"card_number":"6022280000000009","card_exp_month":"12","card_exp_year":"2030","card_cvc":"123"}},"capture_method":"automatic","confirm":true}'
+
+bin-demo-visa:
+	@echo "=== Sending Visa BIN Payment (411111 -> stripe_test) ==="
+	curl -s -X POST 'http://localhost:8080/payments' \
+		-H 'Content-Type: application/json' \
+		-H 'api-key: $(API_KEY)' \
+		-d '{"amount":2500,"currency":"USD","payment_method":"card","payment_method_data":{"card":{"card_number":"4111111111111111","card_exp_month":"12","card_exp_year":"2030","card_cvc":"123"}},"capture_method":"automatic","confirm":true}'

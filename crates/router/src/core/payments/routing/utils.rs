@@ -1538,6 +1538,7 @@ pub enum StaticRoutingAlgorithm {
     Priority(Vec<ConnectorInfo>),
     VolumeSplit(Vec<VolumeSplit<ConnectorInfo>>),
     Advanced(Program),
+    BinRouting(api_routing::BinRoutingConfig),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1576,6 +1577,7 @@ impl From<RoutingAlgorithmRecord> for routing_algorithm::RoutingProfileMetadata 
             StaticRoutingAlgorithm::Priority(_) => enums::RoutingAlgorithmKind::Priority,
             StaticRoutingAlgorithm::VolumeSplit(_) => enums::RoutingAlgorithmKind::VolumeSplit,
             StaticRoutingAlgorithm::Advanced(_) => enums::RoutingAlgorithmKind::Advanced,
+            StaticRoutingAlgorithm::BinRouting(_) => enums::RoutingAlgorithmKind::Advanced,
         };
         Self {
             profile_id: record.created_by,

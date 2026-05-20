@@ -426,6 +426,12 @@ pub async fn create_routing_algorithm_under_profile(
                 );
                 None
             }
+            EuclidAlgorithm::BinRouting(_) => {
+                router_env::logger::info!(
+                    "decision_engine_euclid: BinRouting is handled natively; skipping DE sync"
+                );
+                None
+            }
         };
 
         if let Some(static_algorithm) = maybe_static_algorithm {
@@ -2635,6 +2641,13 @@ pub async fn migrate_rules_for_profile(
                     "Skipping 3DS rule migration (not supported yet)"
                 );
                 push_error(algorithm_id.clone(), "3DS migration not implemented".into());
+                None
+            }
+            Ok(EuclidAlgorithm::BinRouting(_)) => {
+                router_env::logger::info!(
+                    ?algorithm_id,
+                    "Skipping BinRouting migration (handled natively)"
+                );
                 None
             }
             Err(e) => {

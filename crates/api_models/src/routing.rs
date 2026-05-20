@@ -616,6 +616,21 @@ pub enum StaticRoutingAlgorithm {
     Advanced(Program<ConnectorSelection>),
     #[schema(value_type=ProgramThreeDsDecisionRule)]
     ThreeDsDecisionRule(Program<ThreeDSDecisionRule>),
+    BinRouting(BinRoutingConfig),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct BinRoutingRule {
+    pub bin_prefix: String,
+    pub connector: RoutableConnectorChoice,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct BinRoutingConfig {
+    pub rules: Vec<BinRoutingRule>,
+    pub default: Option<RoutableConnectorChoice>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -641,7 +656,7 @@ pub struct RuleThreeDsDecisionRule {
 impl StaticRoutingAlgorithm {
     pub fn should_validate_connectors_in_routing_config(&self) -> bool {
         match self {
-            Self::Single(_) | Self::Priority(_) | Self::VolumeSplit(_) | Self::Advanced(_) => true,
+            Self::Single(_) | Self::Priority(_) | Self::VolumeSplit(_) | Self::Advanced(_) | Self::BinRouting(_) => true,
             Self::ThreeDsDecisionRule(_) => false,
         }
     }
@@ -655,6 +670,7 @@ pub enum RoutingAlgorithmSerde {
     VolumeSplit(Vec<ConnectorVolumeSplit>),
     Advanced(Program<ConnectorSelection>),
     ThreeDsDecisionRule(Program<ThreeDSDecisionRule>),
+    BinRouting(BinRoutingConfig),
 }
 
 impl TryFrom<RoutingAlgorithmSerde> for StaticRoutingAlgorithm {
@@ -672,6 +688,11 @@ impl TryFrom<RoutingAlgorithmSerde> for StaticRoutingAlgorithm {
                     "Connectors list can't be empty for Volume split Algorithm",
                 ))?
             }
+            RoutingAlgorithmSerde::BinRouting(i) if i.rules.is_empty() => {
+                Err(ParsingError::StructParseFailure(
+                    "Rules list can't be empty for Bin Routing Algorithm",
+                ))?
+            }
             _ => {}
         };
         Ok(match value {
@@ -680,6 +701,7 @@ impl TryFrom<RoutingAlgorithmSerde> for StaticRoutingAlgorithm {
             RoutingAlgorithmSerde::VolumeSplit(i) => Self::VolumeSplit(i),
             RoutingAlgorithmSerde::Advanced(i) => Self::Advanced(i),
             RoutingAlgorithmSerde::ThreeDsDecisionRule(i) => Self::ThreeDsDecisionRule(i),
+            RoutingAlgorithmSerde::BinRouting(i) => Self::BinRouting(i),
         })
     }
 }
@@ -783,6 +805,7 @@ impl StaticRoutingAlgorithm {
             Self::VolumeSplit(_) => RoutingAlgorithmKind::VolumeSplit,
             Self::Advanced(_) => RoutingAlgorithmKind::Advanced,
             Self::ThreeDsDecisionRule(_) => RoutingAlgorithmKind::ThreeDsDecisionRule,
+            Self::BinRouting(_) => RoutingAlgorithmKind::Advanced,
         }
     }
 }

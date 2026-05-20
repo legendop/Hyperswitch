@@ -10803,6 +10803,7 @@ pub enum RoutingApproach {
     StraightThroughRouting,
     #[default]
     DefaultFallback,
+    BinOverride,
     #[serde(untagged)]
     #[strum(default)]
     Other(String),

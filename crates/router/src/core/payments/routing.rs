@@ -84,6 +84,7 @@ pub enum CachedAlgorithm {
     Priority(Vec<routing_types::RoutableConnectorChoice>),
     VolumeSplit(Vec<routing_types::ConnectorVolumeSplit>),
     Advanced(backend::VirInterpreterBackend<ConnectorSelection>),
+    BinRouting(routing_types::BinRoutingConfig),
 }
 
 #[cfg(feature = "v1")]
@@ -1627,6 +1628,45 @@ pub async fn perform_hybrid_routing_if_enabled(
     }
 }
 
+fn perform_bin_routing(
+    config: &routing_types::BinRoutingConfig,
+    backend_input: &backend::BackendInput,
+) -> Vec<routing_types::RoutableConnectorChoice> {
+    let card_bin = match backend_input.payment.card_bin.as_deref() {
+        Some(bin) if bin.len() >= 6 => bin,
+        _ => {
+            logger::info!("[BIN_ROUTER] No card_bin available; using default");
+            return config
+                .default
+                .as_ref()
+                .map(|d| vec![d.clone()])
+                .unwrap_or_default();
+        }
+    };
+
+    for rule in &config.rules {
+        if card_bin.starts_with(&rule.bin_prefix) {
+            logger::info!(
+                "[BIN_ROUTER] BIN {} matched prefix {}; selected {:?}",
+                card_bin,
+                rule.bin_prefix,
+                rule.connector.connector
+            );
+            return vec![rule.connector.clone()];
+        }
+    }
+
+    logger::info!(
+        "[BIN_ROUTER] No BIN rule matched for {}; using default",
+        card_bin
+    );
+    config
+        .default
+        .as_ref()
+        .map(|d| vec![d.clone()])
+        .unwrap_or_default()
+}
+
 pub async fn static_routing_v1(
     routing_algorithm: &CachedAlgorithm,
     backend_input: backend::BackendInput,
@@ -1640,6 +1680,7 @@ pub async fn static_routing_v1(
         CachedAlgorithm::Advanced(interpreter) => {
             execute_dsl_and_get_connector_v1(backend_input, interpreter)?
         }
+        CachedAlgorithm::BinRouting(config) => perform_bin_routing(config, &backend_input),
     };
     Ok(routable_connectors)
 }
@@ -1754,6 +1795,10 @@ pub async fn perform_static_routing_v1(
         CachedAlgorithm::Advanced(interpreter) => (
             execute_dsl_and_get_connector_v1(backend_input, interpreter)?,
             Some(common_enums::RoutingApproach::RuleBasedRouting),
+        ),
+        CachedAlgorithm::BinRouting(config) => (
+            perform_bin_routing(config, &backend_input),
+            Some(common_enums::RoutingApproach::BinOverride),
         ),
     };
 
@@ -1942,6 +1987,9 @@ pub async fn refresh_routing_cache_v1(
         api_models::routing::StaticRoutingAlgorithm::ThreeDsDecisionRule(_program) => {
             Err(errors::RoutingError::InvalidRoutingAlgorithmStructure)
                 .attach_printable("Unsupported algorithm received")?
+        }
+        routing_types::StaticRoutingAlgorithm::BinRouting(config) => {
+            CachedAlgorithm::BinRouting(config)
         }
     };
 
@@ -2791,6 +2839,10 @@ async fn perform_session_routing_for_pm_type(
                     interpreter,
                 )?,
                 Some(common_enums::RoutingApproach::RuleBasedRouting),
+            ),
+            CachedAlgorithm::BinRouting(config) => (
+                perform_bin_routing(config, &session_pm_input.backend_input),
+                Some(common_enums::RoutingApproach::BinOverride),
             ),
         }
     } else {
@@ -4087,4 +4139,142 @@ pub async fn get_active_mca_ids(
     let active_mca_ids: std::collections::HashSet<_> =
         db_mcas.iter().map(|mca| mca.get_id().clone()).collect();
     Ok(active_mca_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use api_models::enums::RoutableConnectors;
+    use euclid::backend::{self, inputs as dsl_inputs};
+
+    use super::{perform_bin_routing, routing_types};
+
+    fn make_backend_input(card_bin: Option<&str>) -> backend::BackendInput {
+        backend::BackendInput {
+            metadata: None,
+            payment: dsl_inputs::PaymentInput {
+                amount: common_utils::types::MinorUnit::zero(),
+                currency: euclid::enums::Currency::USD,
+                authentication_type: None,
+                card_bin: card_bin.map(|s| s.to_string()),
+                extended_card_bin: None,
+                capture_method: None,
+                business_country: None,
+                billing_country: None,
+                business_label: None,
+                setup_future_usage: None,
+                transaction_initiator: None,
+            },
+            payment_method: dsl_inputs::PaymentMethodInput {
+                payment_method: None,
+                payment_method_type: None,
+                card_network: None,
+                card_discovery: None,
+            },
+            acquirer_data: None,
+            customer_device_data: None,
+            issuer_data: None,
+            mandate: dsl_inputs::MandateData {
+                mandate_acceptance_type: None,
+                mandate_type: None,
+                payment_type: None,
+            },
+        }
+    }
+
+    fn make_choice(
+        connector: RoutableConnectors,
+    ) -> routing_types::RoutableConnectorChoice {
+        routing_types::RoutableConnectorChoice {
+            choice_kind: routing_types::RoutableChoiceKind::OnlyConnector,
+            connector,
+            merchant_connector_id: None,
+        }
+    }
+
+    fn make_config(
+        rules: Vec<(&str, RoutableConnectors)>,
+        default: Option<RoutableConnectors>,
+    ) -> routing_types::BinRoutingConfig {
+        routing_types::BinRoutingConfig {
+            rules: rules
+                .into_iter()
+                .map(|(prefix, conn)| routing_types::BinRoutingRule {
+                    bin_prefix: prefix.to_string(),
+                    connector: make_choice(conn),
+                })
+                .collect(),
+            default: default.map(make_choice),
+        }
+    }
+
+    #[test]
+    fn test_bin_routing_matched_rule() {
+        let config = make_config(
+            vec![("602228", RoutableConnectors::Razorpay)],
+            Some(RoutableConnectors::Stripe),
+        );
+        let input = make_backend_input(Some("602228"));
+        let result = perform_bin_routing(&config, &input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].connector, RoutableConnectors::Razorpay);
+    }
+
+    #[test]
+    fn test_bin_routing_prefix_match() {
+        let config = make_config(
+            vec![("6022", RoutableConnectors::Razorpay)],
+            Some(RoutableConnectors::Stripe),
+        );
+        let input = make_backend_input(Some("602228"));
+        let result = perform_bin_routing(&config, &input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].connector, RoutableConnectors::Razorpay);
+    }
+
+    #[test]
+    fn test_bin_routing_unmatched_bin_uses_default() {
+        let config = make_config(
+            vec![("602228", RoutableConnectors::Razorpay)],
+            Some(RoutableConnectors::Stripe),
+        );
+        let input = make_backend_input(Some("411111"));
+        let result = perform_bin_routing(&config, &input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].connector, RoutableConnectors::Stripe);
+    }
+
+    #[test]
+    fn test_bin_routing_no_bin_uses_default() {
+        let config = make_config(
+            vec![("602228", RoutableConnectors::Razorpay)],
+            Some(RoutableConnectors::Stripe),
+        );
+        let input = make_backend_input(None);
+        let result = perform_bin_routing(&config, &input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].connector, RoutableConnectors::Stripe);
+    }
+
+    #[test]
+    fn test_bin_routing_no_bin_no_default() {
+        let config = make_config(
+            vec![("602228", RoutableConnectors::Razorpay)],
+            None,
+        );
+        let input = make_backend_input(None);
+        let result = perform_bin_routing(&config, &input);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_bin_routing_short_bin_uses_default() {
+        let config = make_config(
+            vec![("602228", RoutableConnectors::Razorpay)],
+            Some(RoutableConnectors::Stripe),
+        );
+        let input = make_backend_input(Some("123"));
+        let result = perform_bin_routing(&config, &input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].connector, RoutableConnectors::Stripe);
+    }
 }
